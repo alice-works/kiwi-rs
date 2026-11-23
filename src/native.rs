@@ -644,9 +644,21 @@ unsafe impl Sync for DynamicLibrary {}
 
 impl DynamicLibrary {
     pub(crate) fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path_string = path.as_ref().to_string_lossy().to_string();
-        let path_c = CString::new(path_string.clone())?;
-        let handle = unsafe { platform_open(path_c.as_ptr()) };
+        let path = path.as_ref();
+        let path_string = path.to_string_lossy().to_string();
+        // LoadLibraryA reads the ANSI code page, so a non-ASCII deploy path fails on Windows.
+        #[cfg(target_os = "windows")]
+        let handle = {
+            use std::os::windows::ffi::OsStrExt;
+            let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+            wide.push(0);
+            unsafe { platform_open(wide.as_ptr()) }
+        };
+        #[cfg(not(target_os = "windows"))]
+        let handle = {
+            let path_c = CString::new(path_string.clone())?;
+            unsafe { platform_open(path_c.as_ptr()) }
+        };
         if handle.is_null() {
             return Err(KiwiError::LibraryLoad(format!(
                 "{} ({})",
@@ -755,15 +767,15 @@ pub(crate) fn c16str_to_string(pointer: *const u16) -> String {
 #[cfg(target_os = "windows")]
 #[link(name = "kernel32")]
 extern "system" {
-    fn LoadLibraryA(lp_lib_file_name: *const c_char) -> *mut c_void;
+    fn LoadLibraryW(lp_lib_file_name: *const u16) -> *mut c_void;
     fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const c_char) -> *mut c_void;
     fn FreeLibrary(h_lib_module: *mut c_void) -> i32;
     fn GetLastError() -> u32;
 }
 
 #[cfg(target_os = "windows")]
-unsafe fn platform_open(path: *const c_char) -> *mut c_void {
-    LoadLibraryA(path)
+unsafe fn platform_open(path: *const u16) -> *mut c_void {
+    LoadLibraryW(path)
 }
 
 #[cfg(target_os = "windows")]
