@@ -477,9 +477,9 @@ impl KiwiBuilder {
             .map(|token| CString::new(token.tag.clone()))
             .collect::<std::result::Result<_, _>>()?;
 
-        let analyzed_form_ptrs: Vec<*const i8> =
+        let analyzed_form_ptrs: Vec<*const c_char> =
             analyzed_forms.iter().map(|value| value.as_ptr()).collect();
-        let analyzed_tag_ptrs: Vec<*const i8> =
+        let analyzed_tag_ptrs: Vec<*const c_char> =
             analyzed_tags.iter().map(|value| value.as_ptr()).collect();
 
         let has_any_span = analyzed
@@ -4359,8 +4359,8 @@ impl Kiwi {
         &self,
         find_fn: unsafe extern "C" fn(
             KiwiHandle,
-            *const i8,
-            *const i8,
+            *const c_char,
+            *const c_char,
             c_int,
             *mut c_uint,
             c_int,
@@ -5936,6 +5936,11 @@ fn require_optional_api<T: Copy>(function: Option<T>, name: &'static str) -> Res
     })
 }
 
+/// `POSTag::max` of Kiwi 0.24 (`UN` through `P`). Later versions only add tags after these.
+const KIWI_TAG_COUNT: u8 = 61;
+/// `POSTag::irregular`: ids with this bit are answered without the tag name table.
+const KIWI_IRREGULAR_TAG: u8 = 0x80;
+
 fn build_tag_name_cache(api: &KiwiApi, kiwi_handle: KiwiHandle) -> Arc<Vec<Option<String>>> {
     let mut cache = vec![None; 256];
     let Some(tag_to_string) = api.kiwi_tag_to_string else {
@@ -5943,7 +5948,11 @@ fn build_tag_name_cache(api: &KiwiApi, kiwi_handle: KiwiHandle) -> Arc<Vec<Optio
     };
 
     clear_kiwi_error(api);
-    for tag_id in 0u8..=u8::MAX {
+    // kiwi_tag_to_string indexes Kiwi's tag name table without a bounds check (its assert is
+    // compiled out of release builds). An id between the last tag and the irregular bit reads past
+    // the table, and reading that garbage as a string crashes the process on Windows. Ids with the
+    // irregular bit never index the table. A tag that is not cached is read per token instead.
+    for tag_id in (0u8..KIWI_TAG_COUNT).chain(KIWI_IRREGULAR_TAG..=u8::MAX) {
         let pointer = unsafe { tag_to_string(kiwi_handle, tag_id) };
         if pointer.is_null() {
             continue;
